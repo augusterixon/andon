@@ -1,5 +1,6 @@
-// Generates build/icon.icns using the stacked-circles logo (horizontal
-// orientation, leftmost circle in front). Pure JS, no external tools needed.
+// Generates build/icon.icns — the "radar / signal" mark (concentric rings
+// with a solid center dot), on white with near-black ink. Pure JS, no
+// external tools needed.
 //
 // Run with: node build-icon.js
 
@@ -8,9 +9,9 @@ const path = require('path');
 const zlib = require('zlib');
 
 const BG = [255, 255, 255];
-const STROKE = [26, 26, 26];
+const INK = [26, 26, 26];
 
-// --- PNG encoder (RGB, no alpha needed — full-bleed background square) ---
+// --- PNG encoder ---
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
@@ -46,43 +47,39 @@ function encodePNG(size, pixels) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
-  ihdr[8] = 8; ihdr[9] = 2; // 8-bit depth, RGB (no alpha)
+  ihdr[8] = 8; ihdr[9] = 2;
   const idat = zlib.deflateSync(raw);
   const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]);
 }
 
-// Renders the 3-circle stacked logo at the given canvas size.
-// Proportions locked to the approved preview: r/size ≈ 0.17, dx/size ≈ 0.20.
-function renderLogoPNG(size) {
-  const R = size * 0.17;
-  const DX = size * 0.20;
-  const strokeW = size * 0.0225;
-  const cx = size / 2;
-  const cy = size / 2;
-
-  // Draw back-to-front: rightmost first, leftmost (front) last.
-  const circles = [
-    { cx: cx + DX, cy },
-    { cx, cy },
-    { cx: cx - DX, cy },
-  ];
-
-  const pixels = new Array(size * size).fill(BG);
-
-  for (const c of circles) {
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const dist = Math.sqrt((x - c.cx) ** 2 + (y - c.cy) ** 2);
-        if (dist <= R + strokeW / 2) {
-          const idx = y * size + x;
-          pixels[idx] = Math.abs(dist - R) <= strokeW / 2 ? STROKE : BG;
-        }
-      }
+function strokeCircle(pixels, size, cx, cy, r, w, color) {
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (Math.abs(d - r) <= w / 2) pixels[y * size + x] = color;
     }
   }
+}
+function fillCircle(pixels, size, cx, cy, r, color) {
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      if (d <= r) pixels[y * size + x] = color;
+    }
+  }
+}
 
-  return encodePNG(size, pixels);
+// Radar/signal mark — every dimension is a fraction of `size`, so it holds
+// up correctly whether rendered at 16px or 1024px. ~15% safe margin from
+// the edge on all sides.
+function renderIcon(size) {
+  const pixels = new Array(size * size).fill(BG);
+  const cx = size / 2, cy = size / 2;
+  strokeCircle(pixels, size, cx, cy, size * 0.32, size * 0.022, INK);
+  strokeCircle(pixels, size, cx, cy, size * 0.20, size * 0.022, INK);
+  fillCircle(pixels, size, cx, cy, size * 0.07, INK);
+  return pixels;
 }
 
 // --- icns container ---
@@ -99,7 +96,7 @@ const ICON_SIZES = [
 function buildIcns() {
   const chunks = [];
   for (const { type, size } of ICON_SIZES) {
-    const png = renderLogoPNG(size);
+    const png = encodePNG(size, renderIcon(size));
     const typeBuf = Buffer.from(type, 'ascii');
     const lenBuf = Buffer.alloc(4);
     lenBuf.writeUInt32BE(8 + png.length, 0);
@@ -121,9 +118,6 @@ function buildIcns() {
 const outDir = path.join(__dirname, 'build');
 if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'icon.icns'), buildIcns());
-
-// Also drop a plain 1024 PNG alongside it — handy for anything that isn't
-// specifically the macOS .icns format (README hero image, a website, etc).
-fs.writeFileSync(path.join(outDir, 'icon-1024.png'), renderLogoPNG(1024));
+fs.writeFileSync(path.join(outDir, 'icon-1024.png'), encodePNG(1024, renderIcon(1024)));
 
 console.log('Wrote build/icon.icns and build/icon-1024.png');
