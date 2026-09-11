@@ -18,6 +18,7 @@ const STALE_MS = 1000 * 60 * 10;
 let tray = null;
 let lastColor = null;
 let isAnimating = false;
+let isCheckingForUpdates = false;
 
 function loadJson(file, fallback) {
   try {
@@ -92,7 +93,11 @@ function buildMenu(projects) {
     { type: 'separator' },
     { label: 'Play sound on done', type: 'checkbox', checked: prefs.soundEnabled !== false, click: toggleSound },
     { label: 'Reset All (clear stuck state)', click: resetAll },
-    { label: 'Check for Updates...', click: () => checkForUpdates({ silent: false }).then(handleUpdateResult) },
+    {
+      label: isCheckingForUpdates ? 'Checking for Updates...' : 'Check for Updates...',
+      enabled: !isCheckingForUpdates,
+      click: () => runUpdateCheck(false),
+    },
     { label: 'Quit Andon', click: () => app.quit() },
   ];
   return Menu.buildFromTemplate(items);
@@ -153,38 +158,33 @@ function refresh() {
 }
 
 function runSetup() {
-  // Runs on every launch, not just the first — cheap, and guarantees hooks
-  // stay installed even if the user reinstalled the app or cleared config.
-  //
-  // Order matters: installAllHooks() migrates an old ~/.claude-lights
-  // folder to ~/.andon (from before the app was renamed), and that
-  // migration only fires if ~/.andon does not already exist. So this
-  // must run BEFORE we create STATE_DIR ourselves, or we'd silently
-  // block our own migration by pre-creating an empty ~/.andon first.
   try {
     installAllHooks();
   } catch (err) {
-    // Never let a hook-install hiccup prevent the tray from launching —
-    // the user can still use the widget, they'd just need to re-run setup.
     console.error('Hook setup failed:', err);
   }
 
-  // Safety net in case installAllHooks() threw before creating the folder.
   if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
 
-  // Read from inside the app bundle (works even packaged in an asar archive)
-  // and write out to a real filesystem path, since Claude Code / Cursor
-  // invoke this as `node ~/.andon/update-status.js`, a separate
-  // process that has no access to the app's bundled resources.
   const bundledScript = fs.readFileSync(path.join(__dirname, 'update-status.js'), 'utf8');
   fs.writeFileSync(path.join(STATE_DIR, 'update-status.js'), bundledScript);
 }
 
-const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 4; // every 4 hours
+const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 4;
 
 function handleUpdateResult(result) {
   if (result.updated) {
     setTimeout(() => app.quit(), 500);
+  }
+}
+
+async function runUpdateCheck(silent) {
+  isCheckingForUpdates = true;
+  try {
+    const result = await checkForUpdates({ silent });
+    handleUpdateResult(result);
+  } finally {
+    isCheckingForUpdates = false;
   }
 }
 
@@ -198,9 +198,9 @@ app.whenReady().then(() => {
   refresh();
   setInterval(refresh, 1000);
 
-  checkForUpdates({ silent: true }).then(handleUpdateResult);
+  runUpdateCheck(true);
   setInterval(() => {
-    checkForUpdates({ silent: true }).then(handleUpdateResult);
+    runUpdateCheck(true);
   }, UPDATE_CHECK_INTERVAL_MS);
 });
 

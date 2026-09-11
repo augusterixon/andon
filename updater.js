@@ -96,6 +96,7 @@ function notify(title, message) {
  */
 async function checkForUpdates({ silent = true } = {}) {
   try {
+    if (!silent) notify('Andon', 'Checking for updates...');
     const release = await fetchJson(`https://api.github.com/repos/${REPO}/releases/latest`);
     const latestVersion = release.tag_name.replace(/^v/, '');
 
