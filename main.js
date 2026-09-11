@@ -40,13 +40,13 @@ function getPrefs() {
 function toggleSound() {
   const prefs = getPrefs();
   saveJson(PREFS_FILE, { ...prefs, soundEnabled: !prefs.soundEnabled });
-  refresh();
+  updateMenu();
 }
 
 function setSelected(name) {
   const prefs = getPrefs();
   saveJson(PREFS_FILE, { ...prefs, selected: name });
-  refresh();
+  updateMenu();
 }
 
 function computeState() {
@@ -76,7 +76,7 @@ function computeState() {
 
 function resetAll() {
   saveJson(STATE_FILE, { projects: {} });
-  refresh();
+  updateMenu();
 }
 
 function buildMenu(projects) {
@@ -154,6 +154,10 @@ function refresh() {
   }
 
   lastColor = color;
+}
+
+function updateMenu() {
+  const { projects } = computeState();
   tray.setContextMenu(buildMenu(projects));
 }
 
@@ -195,6 +199,11 @@ app.whenReady().then(() => {
   tray = new Tray(icon);
   tray.setTitle(EMOJI.off);
   tray.setToolTip('Andon');
+
+  tray.on('click', updateMenu);
+  tray.on('right-click', updateMenu);
+  updateMenu();
+
   refresh();
   setInterval(refresh, 1000);
 
