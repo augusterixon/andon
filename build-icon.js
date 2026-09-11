@@ -1,6 +1,7 @@
-// Generates build/icon.icns — the "radar / signal" mark (concentric rings
-// with a solid center dot), on white with near-black ink. Pure JS, no
-// external tools needed.
+// Generates build/icon.icns: a single solid white circle on a fully
+// transparent background (real alpha channel, not a white square) — macOS
+// applies its own standard rounded-icon treatment around the transparent
+// edges. Pure JS, no external tools needed.
 //
 // Run with: node build-icon.js
 
@@ -8,10 +9,9 @@ const fs = require('fs');
 const path = require('path');
 const zlib = require('zlib');
 
-const BG = [255, 255, 255];
-const INK = [26, 26, 26];
+const WHITE = [255, 255, 255];
 
-// --- PNG encoder ---
+// --- PNG encoder (RGBA — color type 6, real alpha channel) ---
 const CRC_TABLE = (() => {
   const table = new Uint32Array(256);
   for (let n = 0; n < 256; n++) {
@@ -34,51 +34,43 @@ function chunk(type, data) {
   crc.writeUInt32BE(crc32(Buffer.concat([typeBuf, data])), 0);
   return Buffer.concat([len, typeBuf, data, crc]);
 }
-function encodePNG(size, pixels) {
-  const raw = Buffer.alloc(size * (1 + size * 3));
+function encodeRGBAPNG(size, rgbaPixels) {
+  const raw = Buffer.alloc(size * (1 + size * 4));
   let o = 0;
   for (let y = 0; y < size; y++) {
     raw[o++] = 0;
     for (let x = 0; x < size; x++) {
-      const [r, g, b] = pixels[y * size + x];
-      raw[o++] = r; raw[o++] = g; raw[o++] = b;
+      const [r, g, b, a] = rgbaPixels[y * size + x];
+      raw[o++] = r; raw[o++] = g; raw[o++] = b; raw[o++] = a;
     }
   }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(size, 0);
   ihdr.writeUInt32BE(size, 4);
-  ihdr[8] = 8; ihdr[9] = 2;
+  ihdr[8] = 8; ihdr[9] = 6; // 8-bit depth, RGBA
   const idat = zlib.deflateSync(raw);
   const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
   return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))]);
 }
 
-function strokeCircle(pixels, size, cx, cy, r, w, color) {
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
-      if (Math.abs(d - r) <= w / 2) pixels[y * size + x] = color;
-    }
-  }
-}
-function fillCircle(pixels, size, cx, cy, r, color) {
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
-      if (d <= r) pixels[y * size + x] = color;
-    }
-  }
-}
-
-// Radar/signal mark — every dimension is a fraction of `size`, so it holds
-// up correctly whether rendered at 16px or 1024px. ~15% safe margin from
-// the edge on all sides.
+// Plain solid white circle, ~70% of canvas diameter (standard icon safe
+// area), soft anti-aliased edge, fully transparent everywhere else.
 function renderIcon(size) {
-  const pixels = new Array(size * size).fill(BG);
+  const pixels = new Array(size * size).fill([0, 0, 0, 0]); // fully transparent
   const cx = size / 2, cy = size / 2;
-  strokeCircle(pixels, size, cx, cy, size * 0.32, size * 0.022, INK);
-  strokeCircle(pixels, size, cx, cy, size * 0.20, size * 0.022, INK);
-  fillCircle(pixels, size, cx, cy, size * 0.07, INK);
+  const radius = size * 0.35;
+  const edgeSoftness = size * 0.006;
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dist = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+      let alpha;
+      if (dist <= radius - edgeSoftness) alpha = 255;
+      else if (dist >= radius + edgeSoftness) alpha = 0;
+      else alpha = Math.round(255 * (1 - (dist - (radius - edgeSoftness)) / (edgeSoftness * 2)));
+      if (alpha > 0) pixels[y * size + x] = [...WHITE, alpha];
+    }
+  }
   return pixels;
 }
 
@@ -96,7 +88,7 @@ const ICON_SIZES = [
 function buildIcns() {
   const chunks = [];
   for (const { type, size } of ICON_SIZES) {
-    const png = encodePNG(size, renderIcon(size));
+    const png = encodeRGBAPNG(size, renderIcon(size));
     const typeBuf = Buffer.from(type, 'ascii');
     const lenBuf = Buffer.alloc(4);
     lenBuf.writeUInt32BE(8 + png.length, 0);
@@ -118,6 +110,6 @@ function buildIcns() {
 const outDir = path.join(__dirname, 'build');
 if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(path.join(outDir, 'icon.icns'), buildIcns());
-fs.writeFileSync(path.join(outDir, 'icon-1024.png'), encodePNG(1024, renderIcon(1024)));
+fs.writeFileSync(path.join(outDir, 'icon-1024.png'), encodeRGBAPNG(1024, renderIcon(1024)));
 
 console.log('Wrote build/icon.icns and build/icon-1024.png');
