@@ -30,7 +30,10 @@ function loadJson(file, fallback) {
 
 function saveJson(file, data) {
   if (!fs.existsSync(STATE_DIR)) fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(data, null, 2));
+  const payload = JSON.stringify(data, null, 2);
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, payload);
+  fs.renameSync(tmp, file);
 }
 
 function getPrefs() {
@@ -47,6 +50,7 @@ function setSelected(name) {
   const prefs = getPrefs();
   saveJson(PREFS_FILE, { ...prefs, selected: name });
   updateMenu();
+  refresh();
 }
 
 function computeState() {
@@ -77,6 +81,7 @@ function computeState() {
 function resetAll() {
   saveJson(STATE_FILE, { projects: {} });
   updateMenu();
+  refresh();
 }
 
 function buildMenu(projects) {
@@ -114,14 +119,40 @@ const PULSE_FRAMES = 20;
 const PULSE_COUNT = 3;
 const FRAME_INTERVAL_MS = 20;
 
+const ICON_COLORS = {
+  red: { top: [255, 90, 80], bottom: [200, 35, 30] },
+  yellow: { top: [255, 210, 70], bottom: [220, 150, 20] },
+  green: { top: GREEN_TOP, bottom: GREEN_BOTTOM },
+  off: { top: [210, 210, 215], bottom: [150, 150, 155] },
+};
+
+function makeCircleImage(top, bottom, alpha) {
+  const png = renderCirclePNG(ICON_SIZE, top, bottom, alpha);
+  const img = nativeImage.createFromBuffer(png, { width: ICON_SIZE, height: ICON_SIZE, scaleFactor: 2 });
+  img.setTemplateImage(false);
+  return img;
+}
+
+const stateImages = {};
+for (const [name, colors] of Object.entries(ICON_COLORS)) {
+  stateImages[name] = makeCircleImage(colors.top, colors.bottom, 1);
+}
+
 const pulseFrames = [];
 for (let p = 0; p < PULSE_COUNT; p++) {
   for (let f = 0; f < PULSE_FRAMES; f++) {
     const t = f / (PULSE_FRAMES - 1);
     const alpha = Math.sin(Math.PI * t);
-    const png = renderCirclePNG(ICON_SIZE, GREEN_TOP, GREEN_BOTTOM, Math.max(0.05, alpha));
-    pulseFrames.push(nativeImage.createFromBuffer(png, { width: ICON_SIZE, height: ICON_SIZE, scaleFactor: 2 }));
+    pulseFrames.push(makeCircleImage(GREEN_TOP, GREEN_BOTTOM, Math.max(0.05, alpha)));
   }
+}
+
+function applyTrayColor(color) {
+  const key = stateImages[color] ? color : 'off';
+  // Colored PNGs actually change in the menu bar; same-length emoji titles often don't.
+  tray.setTitle('');
+  tray.setImage(stateImages[key]);
+  tray.setToolTip(`Andon ${EMOJI[key]}`);
 }
 
 function pulseDone() {
@@ -133,23 +164,22 @@ function pulseDone() {
     i += 1;
     if (i >= pulseFrames.length) {
       clearInterval(anim);
-      tray.setImage(nativeImage.createEmpty());
-      tray.setTitle(EMOJI.green);
       isAnimating = false;
+      applyTrayColor(computeState().color);
     }
   }, FRAME_INTERVAL_MS);
 }
 
 function refresh() {
-  const { color, projects } = computeState();
+  const { color } = computeState();
   const prefs = getPrefs();
 
   if (!isAnimating) {
     if (color === 'green' && lastColor !== null && lastColor !== 'green') {
       if (prefs.soundEnabled !== false) playDoneSound();
       pulseDone();
-    } else {
-      tray.setTitle(EMOJI[color] || EMOJI.off);
+    } else if (color !== lastColor) {
+      applyTrayColor(color);
     }
   }
 
@@ -195,10 +225,10 @@ async function runUpdateCheck(silent) {
 app.whenReady().then(() => {
   runSetup();
 
-  const icon = nativeImage.createEmpty();
-  tray = new Tray(icon);
-  tray.setTitle(EMOJI.off);
+  tray = new Tray(stateImages.off);
+  tray.setTitle('');
   tray.setToolTip('Andon');
+  applyTrayColor('off');
 
   tray.on('click', updateMenu);
   tray.on('right-click', updateMenu);

@@ -61,7 +61,9 @@ function writeState(cwd, state) {
     state,
     updatedAt: new Date().toISOString(),
   };
-  fs.writeFileSync(STATE_FILE, JSON.stringify(current, null, 2));
+  const tmp = `${STATE_FILE}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(current, null, 2));
+  fs.renameSync(tmp, STATE_FILE);
 }
 
 function notifyNative(title, message) {
