@@ -16,6 +16,7 @@
     "appId": "tools.andon.app",
     "productName": "Andon",
     "asar": false,
+    "artifactName": "${productName}-${version}-${arch}-mac.${ext}",
     "files": [
       "main.js",
       "pulse-icon.js",

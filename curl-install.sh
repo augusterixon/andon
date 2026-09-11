@@ -5,7 +5,7 @@ set -e
 # Usage:  curl -fsSL <raw-url-to-this-file> | bash
 #
 # Fill in REPO below once your GitHub repo exists.
-REPO="YOUR_GITHUB_USERNAME/andon"
+REPO="augusterixon/andon"
 
 fail() {
   echo ""
