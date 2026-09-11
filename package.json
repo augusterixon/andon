@@ -1,0 +1,37 @@
+{
+  "name": "andon",
+  "version": "0.1.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build-icon": "node build-icon.js",
+    "dist": "npm run build-icon && electron-builder --mac"
+  },
+  "devDependencies": {
+    "electron": "^32.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "tools.andon.app",
+    "productName": "Andon",
+    "asar": false,
+    "files": [
+      "main.js",
+      "pulse-icon.js",
+      "update-status.js",
+      "merge-hooks.js",
+      "generate-pluck.js",
+      "assets/**/*",
+      "package.json"
+    ],
+  "mac": {
+  "icon": "build/icon.icns",
+  "category": "public.app-category.developer-tools",
+  "target": [
+    { "target": "zip", "arch": ["arm64", "x64"] },
+    { "target": "dmg", "arch": ["arm64"] }
+  ]
+}
+  }
+}
