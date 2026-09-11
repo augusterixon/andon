@@ -5,6 +5,7 @@ const path = require('path');
 const { execFile } = require('child_process');
 const { renderCirclePNG } = require('./pulse-icon');
 const { installAllHooks } = require('./merge-hooks');
+const { checkForUpdates } = require('./updater');
 
 const STATE_DIR = path.join(os.homedir(), '.andon');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
@@ -91,6 +92,7 @@ function buildMenu(projects) {
     { type: 'separator' },
     { label: 'Play sound on done', type: 'checkbox', checked: prefs.soundEnabled !== false, click: toggleSound },
     { label: 'Reset All (clear stuck state)', click: resetAll },
+    { label: 'Check for Updates...', click: () => checkForUpdates({ silent: false }).then(handleUpdateResult) },
     { label: 'Quit Andon', click: () => app.quit() },
   ];
   return Menu.buildFromTemplate(items);
@@ -178,6 +180,14 @@ function runSetup() {
   fs.writeFileSync(path.join(STATE_DIR, 'update-status.js'), bundledScript);
 }
 
+const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 4; // every 4 hours
+
+function handleUpdateResult(result) {
+  if (result.updated) {
+    setTimeout(() => app.quit(), 500);
+  }
+}
+
 app.whenReady().then(() => {
   runSetup();
 
@@ -187,6 +197,11 @@ app.whenReady().then(() => {
   tray.setToolTip('Andon');
   refresh();
   setInterval(refresh, 1000);
+
+  checkForUpdates({ silent: true }).then(handleUpdateResult);
+  setInterval(() => {
+    checkForUpdates({ silent: true }).then(handleUpdateResult);
+  }, UPDATE_CHECK_INTERVAL_MS);
 });
 
 app.dock && app.dock.hide();
