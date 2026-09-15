@@ -41,10 +41,7 @@ const CLAUDE_HOOKS = {
 // --- Cursor hooks (flat shape: { command }) — no red mapping, see README ---
 const CURSOR_HOOKS = {
   beforeSubmitPrompt: [{ command: SCRIPT_CMD('yellow') }],
-  beforeShellExecution: [{ command: SCRIPT_CMD('yellow') }],
-  beforeMCPExecution: [{ command: SCRIPT_CMD('yellow') }],
   stop: [{ command: SCRIPT_CMD('green') }],
-  sessionEnd: [{ command: SCRIPT_CMD('green') }],
 };
 
 function loadJson(filePath, fallback) {
