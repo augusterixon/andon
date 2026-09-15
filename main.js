@@ -43,8 +43,14 @@ function saveJson(file, data) {
   fs.renameSync(tmp, file);
 }
 
+function isAllProjects(selected) {
+  return selected == null || selected === '' || selected === 'All';
+}
+
 function getPrefs() {
-  return loadJson(PREFS_FILE, { selected: 'All', soundEnabled: true });
+  const prefs = loadJson(PREFS_FILE, { selected: 'All', soundEnabled: true });
+  if (isAllProjects(prefs.selected)) prefs.selected = 'All';
+  return prefs;
 }
 
 function toggleSound() {
@@ -56,7 +62,8 @@ function toggleSound() {
 
 function setSelected(name) {
   const prefs = getPrefs();
-  saveJson(PREFS_FILE, { ...prefs, selected: name });
+  const selected = isAllProjects(name) ? 'All' : name;
+  saveJson(PREFS_FILE, { ...prefs, selected });
   updateMenu();
   refresh();
   notifyDashboard(computeState().color);
@@ -75,16 +82,16 @@ function computeState() {
 
   const projectNames = entries.map(([cwd]) => path.basename(cwd));
 
-  if (prefs.selected !== 'All') {
+  if (!isAllProjects(prefs.selected)) {
     const match = entries.find(([cwd]) => path.basename(cwd) === prefs.selected);
     return { color: match ? match[1].state : 'off', projects: projectNames };
   }
 
-  let best = 'green';
+  let worst = 'green';
   for (const [, v] of entries) {
-    if ((PRIORITY[v.state] || 0) > (PRIORITY[best] || 0)) best = v.state;
+    if ((PRIORITY[v.state] || 0) > (PRIORITY[worst] || 0)) worst = v.state;
   }
-  return { color: best, projects: projectNames };
+  return { color: worst, projects: projectNames };
 }
 
 function resetAll() {
@@ -418,8 +425,7 @@ function buildTeamsSubmenu() {
 function buildMenu(projects) {
   const prefs = getPrefs();
   const items = [
-    { label: 'All projects', type: 'radio', checked: prefs.selected === 'All', click: () => setSelected('All') },
-    { type: 'separator' },
+    { label: 'All projects', type: 'radio', checked: isAllProjects(prefs.selected), click: () => setSelected(null) },
     ...projects.map((name) => ({
       label: name,
       type: 'radio',

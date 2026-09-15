@@ -84,7 +84,7 @@ function computeDisplayState() {
 
   if (entries.length === 0) return 'off';
 
-  if (prefs.selected !== 'All') {
+  if (prefs.selected != null && prefs.selected !== '' && prefs.selected !== 'All') {
     const match = entries.find(([cwd]) => path.basename(cwd) === prefs.selected);
     return match ? match[1].state : 'off';
   }
@@ -182,7 +182,7 @@ function notifyDashboard(state) {
   try {
     const team = getActiveTeam();
     if (!team) {
-      console.log('Andon: no active team in ~/.andon/teams.json, skipping dashboard notify');
+      console.error('Andon: no active team in ~/.andon/teams.json, skipping dashboard notify');
       return Promise.resolve();
     }
 
@@ -192,13 +192,13 @@ function notifyDashboard(state) {
     const authToken = typeof team.auth_token === 'string' ? team.auth_token.trim() : '';
 
     if (!dashboardUrl || !teamId || !memberId || !authToken) {
-      console.log('Andon: active team config is incomplete, skipping dashboard notify');
+      console.error('Andon: active team config is incomplete, skipping dashboard notify');
       return Promise.resolve();
     }
 
     const mapped = dashboardState(state);
     if (!mapped) {
-      console.log(`Andon: skipping dashboard notify for invalid state "${state}"`);
+      console.error(`Andon: skipping dashboard notify for invalid state "${state}"`);
       return Promise.resolve();
     }
 
