@@ -208,6 +208,7 @@ function notifyDashboard(state) {
       member_id: memberId,
       state: mapped,
       auth_token: authToken,
+      timestamp: new Date().toISOString(),
     }).catch((err) => {
       console.error('Andon: dashboard notify failed', err && err.message ? err.message : err);
     });
