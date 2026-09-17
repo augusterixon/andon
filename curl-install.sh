@@ -85,8 +85,95 @@ if ! node "$HOME/.andon/merge-hooks.js"; then
   fail "Hook installation failed — see the error above. Your existing ~/.cursor/hooks.json was not overwritten."
 fi
 
-echo "Launching Andon (first-time team config + dashboard)..."
+# Invite can come from env (ANDON_JOIN_URL / ANDON_INVITE_CODE) or a URL argument
+# when piped as: curl ... | bash -s -- "andon://join?invite_code=..."
+JOIN_URL=""
+INVITE_CODE="${ANDON_INVITE_CODE:-}"
+TEAM_ID="${ANDON_TEAM_ID:-}"
+TEAM_NAME="${ANDON_TEAM_NAME:-}"
+DASHBOARD_URL="${ANDON_DASHBOARD_URL:-https://andon-dashboard.vercel.app}"
+
+if [ -n "${ANDON_JOIN_URL:-}" ]; then
+  JOIN_URL="$ANDON_JOIN_URL"
+elif [ -n "${1:-}" ]; then
+  case "$1" in
+    andon://*|anon://*|http://*|https://*) JOIN_URL="$1" ;;
+  esac
+fi
+
+parse_join_fields() {
+  node -e '
+    const raw = process.env.ANDON_PARSE_URL || "";
+    if (!raw || raw.length > 2048 || /[\u0000-\u001f\u007f]/.test(raw)) process.exit(2);
+    let url;
+    try { url = new URL(raw); } catch { process.exit(2); }
+    const proto = url.protocol;
+    if (proto !== "andon:" && proto !== "anon:" && proto !== "http:" && proto !== "https:") process.exit(2);
+    const invite = (url.searchParams.get("invite_code") || "").trim();
+    const teamId = (url.searchParams.get("team_id") || "").trim();
+    const teamName = (url.searchParams.get("team_name") || "").trim();
+    const dash = (url.searchParams.get("dashboard_url") || "").trim();
+    if (!/^[A-Za-z0-9]{4,32}$/.test(invite) || !/^[A-Za-z0-9._:-]{1,128}$/.test(teamId)) process.exit(3);
+    if (teamName && (teamName.length > 80 || /[\u0000-\u001f\u007f]/.test(teamName))) process.exit(3);
+    const out = { invite_code: invite, team_id: teamId, team_name: teamName, dashboard_url: dash };
+    process.stdout.write(JSON.stringify(out));
+  '
+}
+
+JOIN_PAYLOAD=""
+if [ -n "$JOIN_URL" ]; then
+  ANDON_PARSE_URL="$JOIN_URL"
+  export ANDON_PARSE_URL
+  PARSED="$(parse_join_fields)" || PARSED=""
+  unset ANDON_PARSE_URL
+  if [ -n "$PARSED" ]; then
+    JOIN_PAYLOAD="$PARSED"
+  else
+    echo "Warning: invite URL was ignored because it was invalid."
+  fi
+elif [ -n "$INVITE_CODE" ] && [ -n "$TEAM_ID" ]; then
+  JOIN_PAYLOAD="$(INVITE_CODE="$INVITE_CODE" TEAM_ID="$TEAM_ID" TEAM_NAME="$TEAM_NAME" DASHBOARD_URL="$DASHBOARD_URL" node -e '
+    const invite = (process.env.INVITE_CODE || "").trim();
+    const teamId = (process.env.TEAM_ID || "").trim();
+    const teamName = (process.env.TEAM_NAME || "").trim();
+    const dash = (process.env.DASHBOARD_URL || "").trim();
+    if (!/^[A-Za-z0-9]{4,32}$/.test(invite) || !/^[A-Za-z0-9._:-]{1,128}$/.test(teamId)) process.exit(3);
+    if (teamName && (teamName.length > 80 || /[\u0000-\u001f\u007f]/.test(teamName))) process.exit(3);
+    process.stdout.write(JSON.stringify({
+      invite_code: invite,
+      team_id: teamId,
+      team_name: teamName,
+      dashboard_url: dash
+    }));
+  ')" || JOIN_PAYLOAD=""
+  if [ -z "$JOIN_PAYLOAD" ]; then
+    echo "Warning: invite environment variables were ignored because they were invalid."
+  fi
+fi
+
+echo "Launching Andon (first-time team config)..."
 open "/Applications/Andon.app"
+
+if [ -n "$JOIN_PAYLOAD" ]; then
+  echo "Waiting for Andon to accept the invite..."
+  JOINED=0
+  for i in $(seq 1 20); do
+    if curl -fsS -X POST "http://127.0.0.1:9876/join" \
+      -H "Content-Type: application/json" \
+      --data-binary "$JOIN_PAYLOAD" >/dev/null 2>&1; then
+      JOINED=1
+      break
+    fi
+    sleep 0.5
+  done
+  if [ "$JOINED" = "1" ]; then
+    echo "Joined team from invite."
+  else
+    echo "Andon launched, but auto-join did not complete. Open the andon:// link again once the menu bar icon is up."
+  fi
+else
+  echo "No invite code provided — Andon will open the dashboard so you can create or join a team."
+fi
 
 echo ""
 echo "──────────────────────────────────────────────"

@@ -17,6 +17,10 @@ const TEAM_CONFIG_HOST = '127.0.0.1';
 const TEAM_CONFIG_PORT = 9876;
 const JOIN_FIELDS = ['team_id', 'member_id', 'auth_token', 'team_name'];
 const DEFAULT_DASHBOARD_URL = 'https://andon-dashboard.vercel.app';
+const ANDON_SCHEMES = new Set(['andon:', 'anon:']);
+const SAFE_INVITE = /^[A-Za-z0-9]{4,32}$/;
+const SAFE_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+const CONTROL_CHARS = /[\u0000-\u001f\u007f]/;
 const DASHBOARD_STATES = new Set(['green', 'yellow', 'red']);
 const DEFAULT_READY_SOUND = 'sound-1';
 const READY_SOUNDS = [
@@ -37,6 +41,10 @@ let tray = null;
 let lastColor = null;
 let isAnimating = false;
 let isCheckingForUpdates = false;
+let joinNotice = null;
+let pendingJoinUrl = null;
+let teamConfigReady = false;
+let skipFirstLaunchDashboard = false;
 
 function loadJson(file, fallback) {
   try {
@@ -182,16 +190,257 @@ function getActiveTeam() {
   return team && typeof team === 'object' ? team : null;
 }
 
+function isSafePlainString(value, maxLen) {
+  return typeof value === 'string' && value.length > 0 && value.length <= maxLen && !CONTROL_CHARS.test(value);
+}
+
+function isSafeDashboardUrl(value) {
+  if (value == null || value === '') return true;
+  if (typeof value !== 'string' || value.length > 512 || CONTROL_CHARS.test(value)) return false;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.username || url.password) return false;
+  if (url.protocol === 'https:') return true;
+  return url.protocol === 'http:' && (url.hostname === '127.0.0.1' || url.hostname === 'localhost');
+}
+
+function sanitizeDashboardUrl(value) {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  if (!trimmed) return DEFAULT_DASHBOARD_URL;
+  if (!isSafeDashboardUrl(trimmed)) return null;
+  return trimmed.replace(/\/$/, '');
+}
+
 function readJoinPayload(body) {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
   const result = {};
   for (const key of JOIN_FIELDS) {
     if (typeof body[key] !== 'string' || !body[key].trim()) return null;
-    result[key] = body[key].trim();
+    const value = body[key].trim();
+    if (key === 'team_name') {
+      if (!isSafePlainString(value, 80)) return null;
+    } else if (!SAFE_ID.test(value)) {
+      return null;
+    }
+    result[key] = value;
   }
-  const fromBody = typeof body.dashboard_url === 'string' ? body.dashboard_url.trim() : '';
-  result.dashboard_url = fromBody || DEFAULT_DASHBOARD_URL;
+  const dashboardUrl = sanitizeDashboardUrl(typeof body.dashboard_url === 'string' ? body.dashboard_url.trim() : '');
+  if (!dashboardUrl) return null;
+  result.dashboard_url = dashboardUrl;
   return result;
+}
+
+function readInviteJoinPayload(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const inviteCode = typeof body.invite_code === 'string' ? body.invite_code.trim() : '';
+  const teamId = typeof body.team_id === 'string' ? body.team_id.trim() : '';
+  if (!SAFE_INVITE.test(inviteCode) || !SAFE_ID.test(teamId)) return null;
+  const teamName = typeof body.team_name === 'string' ? body.team_name.trim() : '';
+  if (teamName && !isSafePlainString(teamName, 80)) return null;
+  const dashboardUrl = sanitizeDashboardUrl(typeof body.dashboard_url === 'string' ? body.dashboard_url.trim() : '');
+  if (!dashboardUrl) return null;
+  return {
+    invite_code: inviteCode,
+    team_id: teamId,
+    team_name: teamName,
+    dashboard_url: dashboardUrl,
+  };
+}
+
+function parseAndonJoinUrl(urlString) {
+  if (typeof urlString !== 'string' || urlString.length > 2048 || CONTROL_CHARS.test(urlString)) {
+    return { error: 'Invalid join link' };
+  }
+  let url;
+  try {
+    url = new URL(urlString);
+  } catch {
+    return { error: 'Invalid join link' };
+  }
+  if (!ANDON_SCHEMES.has(url.protocol)) {
+    return { error: 'Invalid join link' };
+  }
+  const host = (url.hostname || url.host || '').replace(/^\/+/, '');
+  const path = (url.pathname || '').replace(/^\/+/, '');
+  const action = host === 'join' || path === 'join' ? 'join' : host || path;
+  if (action !== 'join') {
+    return { error: 'Invalid join link' };
+  }
+  const invite = readInviteJoinPayload({
+    invite_code: url.searchParams.get('invite_code') || '',
+    team_id: url.searchParams.get('team_id') || '',
+    team_name: url.searchParams.get('team_name') || '',
+    dashboard_url: url.searchParams.get('dashboard_url') || '',
+  });
+  if (!invite) {
+    return { error: 'Join link is missing a valid invite_code or team_id' };
+  }
+  return { invite };
+}
+
+function setJoinNotice(ok, message) {
+  joinNotice = { ok: !!ok, message: String(message || '').slice(0, 80) };
+  try {
+    updateMenu();
+  } catch {
+    // Tray may not exist yet.
+  }
+}
+
+function postLocalJoin(fields) {
+  return new Promise((resolve, reject) => {
+    const payload = Buffer.from(JSON.stringify(fields));
+    const req = http.request(
+      {
+        hostname: TEAM_CONFIG_HOST,
+        port: TEAM_CONFIG_PORT,
+        path: '/join',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': payload.length,
+        },
+        timeout: 8000,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          let parsed = {};
+          try {
+            parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+          } catch {
+            parsed = {};
+          }
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300 && parsed.ok) {
+            resolve(parsed);
+          } else {
+            reject(new Error((parsed && parsed.error) || `join failed (${res.statusCode})`));
+          }
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('join timed out')));
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+function handleOpenUrl(urlString) {
+  const parsed = parseAndonJoinUrl(urlString);
+  if (parsed.error) {
+    console.error('Andon: ignored join URL:', parsed.error);
+    setJoinNotice(false, parsed.error);
+    return;
+  }
+  skipFirstLaunchDashboard = true;
+  if (!teamConfigReady) {
+    pendingJoinUrl = urlString;
+    return;
+  }
+  postLocalJoin(parsed.invite)
+    .then(() => {
+      const label = parsed.invite.team_name ? `Joined ${parsed.invite.team_name}` : 'Joined team';
+      setJoinNotice(true, label);
+    })
+    .catch((err) => {
+      console.error('Andon: join from URL failed', err && err.message ? err.message : err);
+      setJoinNotice(false, err && err.message ? err.message : 'Could not join team');
+    });
+}
+
+function flushPendingJoinUrl() {
+  if (!pendingJoinUrl) return;
+  const url = pendingJoinUrl;
+  pendingJoinUrl = null;
+  handleOpenUrl(url);
+}
+
+function postJson(urlString, body, timeoutMs = 8000) {
+  return new Promise((resolve, reject) => {
+    let url;
+    try {
+      url = new URL(urlString);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const payload = Buffer.from(JSON.stringify(body));
+    const lib = url.protocol === 'http:' ? http : https;
+    const req = lib.request(
+      {
+        hostname: url.hostname,
+        port: url.port || undefined,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': payload.length,
+          'User-Agent': 'Andon',
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          let parsed = {};
+          try {
+            parsed = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
+          } catch {
+            parsed = {};
+          }
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject(new Error((parsed && parsed.error) || `request failed (${res.statusCode})`));
+          }
+        });
+      }
+    );
+    req.on('timeout', () => req.destroy(new Error('request timed out')));
+    req.on('error', reject);
+    req.end(payload);
+  });
+}
+
+async function joinViaInvite(invite) {
+  let memberName;
+  try {
+    const username = os.userInfo().username;
+    if (isSafePlainString(username, 40)) memberName = username;
+  } catch {
+    memberName = undefined;
+  }
+  const joined = await postJson(`${invite.dashboard_url}/api/team/join`, {
+    invite_code: invite.invite_code,
+    name: memberName,
+  });
+  const teamId = typeof joined.team_id === 'string' ? joined.team_id.trim() : '';
+  const memberId = typeof joined.member_id === 'string' ? joined.member_id.trim() : '';
+  const authToken = typeof joined.auth_token === 'string' ? joined.auth_token.trim() : '';
+  const teamName =
+    (typeof joined.team_name === 'string' && joined.team_name.trim()) || invite.team_name;
+  if (!SAFE_ID.test(teamId) || !SAFE_ID.test(memberId) || !SAFE_ID.test(authToken)) {
+    throw new Error('dashboard returned invalid join credentials');
+  }
+  if (teamId !== invite.team_id) {
+    throw new Error('team_id does not match this invite');
+  }
+  if (teamName && !isSafePlainString(teamName, 80)) {
+    throw new Error('dashboard returned an invalid team name');
+  }
+  return {
+    dashboard_url: invite.dashboard_url,
+    team_id: teamId,
+    member_id: memberId,
+    auth_token: authToken,
+    team_name: teamName || teamId,
+  };
 }
 
 function setActiveTeam(teamId) {
@@ -384,24 +633,35 @@ async function handleTeamConfigRequest(req, res) {
     return;
   }
 
-  const fields = readJoinPayload(parsed);
-  if (!fields) {
+  const invite = readInviteJoinPayload(parsed);
+  const fields = invite ? null : readJoinPayload(parsed);
+  if (!invite && !fields) {
     sendJson(res, 400, { ok: false, error: 'missing fields' });
     return;
   }
 
+  let teamRecord;
+  try {
+    teamRecord = invite ? await joinViaInvite(invite) : fields;
+  } catch (err) {
+    sendJson(res, 400, { ok: false, error: err && err.message ? err.message : 'join failed' });
+    return;
+  }
+
   const store = loadTeamsStore();
-  store.teams[fields.team_id] = {
-    dashboard_url: fields.dashboard_url,
-    team_id: fields.team_id,
-    member_id: fields.member_id,
-    auth_token: fields.auth_token,
-    team_name: fields.team_name,
+  store.teams[teamRecord.team_id] = {
+    dashboard_url: teamRecord.dashboard_url,
+    team_id: teamRecord.team_id,
+    member_id: teamRecord.member_id,
+    auth_token: teamRecord.auth_token,
+    team_name: teamRecord.team_name,
   };
-  store.active_team_id = fields.team_id;
+  store.active_team_id = teamRecord.team_id;
   saveTeamsStore(store);
 
   try {
+    const label = teamRecord.team_name ? `Joined ${teamRecord.team_name}` : 'Joined team';
+    setJoinNotice(true, label);
     updateMenu();
     applyTrayColor(computeState().color);
     refresh();
@@ -431,6 +691,8 @@ function startTeamConfigServer() {
     });
     server.listen(TEAM_CONFIG_PORT, TEAM_CONFIG_HOST, () => {
       console.log(`Andon: team config server listening on ${TEAM_CONFIG_HOST}:${TEAM_CONFIG_PORT}`);
+      teamConfigReady = true;
+      flushPendingJoinUrl();
     });
   } catch (err) {
     console.error('Andon: could not start team config server', err && err.message ? err.message : err);
@@ -440,14 +702,19 @@ function startTeamConfigServer() {
 function buildTeamsSubmenu() {
   const store = loadTeamsStore();
   const teamIds = Object.keys(store.teams);
+  const noticeItem = joinNotice
+    ? [{ label: joinNotice.message, enabled: false }, { type: 'separator' }]
+    : [];
   if (teamIds.length === 0) {
     return [
+      ...noticeItem,
       { label: 'Open dashboard', click: () => shell.openExternal(DEFAULT_DASHBOARD_URL) },
       { label: 'No teams yet', enabled: false },
     ];
   }
 
   return [
+    ...noticeItem,
     ...teamIds.map((id) => {
       const team = store.teams[id] || {};
       const label = typeof team.team_name === 'string' && team.team_name ? team.team_name : id;
@@ -629,7 +896,7 @@ app.whenReady().then(() => {
   const { firstLaunch } = runSetup();
   startTeamConfigServer();
 
-  if (firstLaunch) {
+  if (firstLaunch && !skipFirstLaunchDashboard && !pendingJoinUrl) {
     shell.openExternal(DEFAULT_DASHBOARD_URL).catch((err) => {
       console.error('Andon: could not open dashboard', err && err.message ? err.message : err);
     });
@@ -651,6 +918,55 @@ app.whenReady().then(() => {
   setInterval(() => {
     runUpdateCheck(true);
   }, UPDATE_CHECK_INTERVAL_MS);
+});
+
+function registerProtocolClient() {
+  if (process.defaultApp) {
+    if (process.argv.length >= 2) {
+      app.setAsDefaultProtocolClient('andon', process.execPath, [path.resolve(process.argv[1])]);
+    }
+  } else {
+    app.setAsDefaultProtocolClient('andon');
+  }
+}
+
+function ingestLaunchInvites() {
+  const envUrl = process.env.ANDON_JOIN_URL;
+  if (typeof envUrl === 'string' && envUrl) {
+    handleOpenUrl(envUrl);
+  } else if (process.env.ANDON_INVITE_CODE && process.env.ANDON_TEAM_ID) {
+    const params = new URLSearchParams();
+    params.set('invite_code', process.env.ANDON_INVITE_CODE);
+    params.set('team_id', process.env.ANDON_TEAM_ID);
+    if (process.env.ANDON_TEAM_NAME) params.set('team_name', process.env.ANDON_TEAM_NAME);
+    if (process.env.ANDON_DASHBOARD_URL) params.set('dashboard_url', process.env.ANDON_DASHBOARD_URL);
+    handleOpenUrl(`andon://join?${params.toString()}`);
+  }
+  for (const arg of process.argv) {
+    if (typeof arg === 'string' && (arg.startsWith('andon:') || arg.startsWith('anon:'))) {
+      handleOpenUrl(arg);
+    }
+  }
+}
+
+registerProtocolClient();
+
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  ingestLaunchInvites();
+  app.on('second-instance', (_event, argv) => {
+    const url = argv.find((arg) => typeof arg === 'string' && (arg.startsWith('andon:') || arg.startsWith('anon:')));
+    if (url) handleOpenUrl(url);
+  });
+}
+
+app.on('will-finish-launching', () => {
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    handleOpenUrl(url);
+  });
 });
 
 app.dock && app.dock.hide();
