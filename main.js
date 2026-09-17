@@ -23,6 +23,9 @@ const READY_SOUNDS = [
   { id: 'sound-2', label: "That's awkward" },
   { id: 'sound-3', label: "Let's go" },
   { id: 'sound-4', label: 'Kör föffan' },
+  { id: 'sound-5', label: "It's done" },
+  { id: 'sound-6', label: 'Work work' },
+  { id: 'sound-7', label: 'Ready to work' },
 ];
 
 const EMOJI = { red: '🔴', yellow: '🟡', green: '🟢', off: '⚪' };
@@ -86,7 +89,6 @@ function setReadySound(id) {
   const prefs = getPrefs();
   saveJson(PREFS_FILE, { ...prefs, readySound: id });
   updateMenu();
-  playDoneSound();
 }
 
 function computeState() {
