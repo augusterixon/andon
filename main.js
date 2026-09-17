@@ -17,6 +17,13 @@ const TEAM_CONFIG_HOST = '127.0.0.1';
 const TEAM_CONFIG_PORT = 9876;
 const JOIN_FIELDS = ['dashboard_url', 'team_id', 'member_id', 'auth_token', 'team_name'];
 const DASHBOARD_STATES = new Set(['green', 'yellow', 'red']);
+const DEFAULT_READY_SOUND = 'sound-1';
+const READY_SOUNDS = [
+  { id: 'sound-1', label: 'Default' },
+  { id: 'sound-2', label: "That's awkward" },
+  { id: 'sound-3', label: "Let's go" },
+  { id: 'sound-4', label: 'Kör föffan' },
+];
 
 const EMOJI = { red: '🔴', yellow: '🟡', green: '🟢', off: '⚪' };
 const PRIORITY = { red: 3, yellow: 2, green: 1 };
@@ -47,9 +54,14 @@ function isAllProjects(selected) {
   return selected == null || selected === '' || selected === 'All';
 }
 
+function isKnownReadySound(id) {
+  return READY_SOUNDS.some((sound) => sound.id === id);
+}
+
 function getPrefs() {
-  const prefs = loadJson(PREFS_FILE, { selected: 'All', soundEnabled: true });
+  const prefs = loadJson(PREFS_FILE, { selected: 'All', soundEnabled: true, readySound: DEFAULT_READY_SOUND });
   if (isAllProjects(prefs.selected)) prefs.selected = 'All';
+  if (!isKnownReadySound(prefs.readySound)) prefs.readySound = DEFAULT_READY_SOUND;
   return prefs;
 }
 
@@ -67,6 +79,14 @@ function setSelected(name) {
   updateMenu();
   refresh();
   notifyDashboard(computeState().color);
+}
+
+function setReadySound(id) {
+  if (!isKnownReadySound(id)) return;
+  const prefs = getPrefs();
+  saveJson(PREFS_FILE, { ...prefs, readySound: id });
+  updateMenu();
+  playDoneSound();
 }
 
 function computeState() {
@@ -436,6 +456,15 @@ function buildMenu(projects) {
     { type: 'separator' },
     { label: 'Teams', submenu: buildTeamsSubmenu() },
     { label: 'Play sound on done', type: 'checkbox', checked: prefs.soundEnabled !== false, click: toggleSound },
+    {
+      label: 'Ready sound',
+      submenu: READY_SOUNDS.map((sound) => ({
+        label: sound.label,
+        type: 'radio',
+        checked: prefs.readySound === sound.id,
+        click: () => setReadySound(sound.id),
+      })),
+    },
     { label: 'Reset All (clear stuck state)', click: resetAll },
     {
       label: isCheckingForUpdates ? 'Checking for Updates...' : 'Check for Updates...',
@@ -448,7 +477,9 @@ function buildMenu(projects) {
 }
 
 function playDoneSound() {
-  execFile('afplay', [path.join(__dirname, 'assets', 'pluck.wav')], () => {});
+  const prefs = getPrefs();
+  const file = path.join(__dirname, 'assets', `${prefs.readySound}.wav`);
+  execFile('afplay', [file], () => {});
 }
 
 const GREEN_TOP = [90, 200, 100];

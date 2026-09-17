@@ -1,6 +1,6 @@
 // One-time generator for a soft sine-wave "pluck" notification sound.
 // Run with: node generate-pluck.js
-// Produces assets/pluck.wav — a short, smooth tone with a natural decay envelope.
+// Produces assets/sound-1.wav — a short, smooth tone with a natural decay envelope.
 
 const fs = require('fs');
 const path = require('path');
@@ -59,5 +59,5 @@ for (let i = 0; i < samples.length; i++) {
 
 const outDir = path.join(__dirname, 'assets');
 if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-fs.writeFileSync(path.join(outDir, 'pluck.wav'), buffer);
-console.log('Wrote assets/pluck.wav');
+fs.writeFileSync(path.join(outDir, 'sound-1.wav'), buffer);
+console.log('Wrote assets/sound-1.wav');

@@ -46,12 +46,12 @@ cp update-status.js ~/.andon/update-status.js
 echo "✓ Installed update-status.js to ~/.andon"
 
 # --- 3. Sound asset — ship the tuned one; only regenerate if truly missing ---
-if [ ! -f assets/pluck.wav ]; then
+if [ ! -f assets/sound-1.wav ]; then
   mkdir -p assets
   node generate-pluck.js
-  echo "✓ Generated notification sound"
+  echo "✓ Generated default notification sound"
 else
-  echo "✓ Notification sound present"
+  echo "✓ Notification sounds present"
 fi
 
 # --- 4. Dependencies ---
