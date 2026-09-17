@@ -95,6 +95,19 @@ function mergeHookEvent(existingArray, ourEntries) {
   return arr;
 }
 
+// Cursor only uses beforeSubmitPrompt + stop. Drop leftover Andon entries
+// from older installs so we don't double-fire on extra events.
+function pruneObsoleteCursorHooks(hooks) {
+  const keep = new Set(Object.keys(CURSOR_HOOKS));
+  for (const event of Object.keys(hooks)) {
+    if (keep.has(event)) continue;
+    const arr = Array.isArray(hooks[event]) ? hooks[event] : [];
+    const next = arr.filter((e) => !referencesMarker(e, NEW_MARKER) && !referencesMarker(e, OLD_MARKER));
+    if (next.length === 0) delete hooks[event];
+    else hooks[event] = next;
+  }
+}
+
 function installClaudeHooks() {
   ensureDirFor(CLAUDE_SETTINGS_PATH);
   const settings = loadJson(CLAUDE_SETTINGS_PATH, {});
@@ -117,6 +130,7 @@ function installCursorHooks() {
   for (const [event, entries] of Object.entries(CURSOR_HOOKS)) {
     config.hooks[event] = mergeHookEvent(config.hooks[event], entries);
   }
+  pruneObsoleteCursorHooks(config.hooks);
 
   fs.writeFileSync(CURSOR_HOOKS_PATH, JSON.stringify(config, null, 2));
   console.log(`✓ Merged Cursor hooks into ${CURSOR_HOOKS_PATH}`);

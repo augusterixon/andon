@@ -22,6 +22,7 @@ const STATE_DIR = path.join(os.homedir(), '.andon');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');
 const PREFS_FILE = path.join(STATE_DIR, 'widget-prefs.json');
 const TEAMS_FILE = path.join(STATE_DIR, 'teams.json');
+const DEFAULT_DASHBOARD_URL = 'https://andon-dashboard.vercel.app';
 const DASHBOARD_STATES = new Set(['green', 'yellow', 'red']);
 const PRIORITY = { red: 3, yellow: 2, green: 1 };
 const STALE_MS = 1000 * 60 * 10;
@@ -186,7 +187,7 @@ function notifyDashboard(state) {
       return Promise.resolve();
     }
 
-    const dashboardUrl = typeof team.dashboard_url === 'string' ? team.dashboard_url.trim() : '';
+    const dashboardUrl = (typeof team.dashboard_url === 'string' && team.dashboard_url.trim()) || DEFAULT_DASHBOARD_URL;
     const teamId = typeof team.team_id === 'string' ? team.team_id.trim() : '';
     const memberId = typeof team.member_id === 'string' ? team.member_id.trim() : '';
     const authToken = typeof team.auth_token === 'string' ? team.auth_token.trim() : '';

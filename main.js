@@ -1,4 +1,4 @@
-const { app, Tray, Menu, nativeImage, clipboard } = require('electron');
+const { app, Tray, Menu, nativeImage, clipboard, shell } = require('electron');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
@@ -15,7 +15,8 @@ const PREFS_FILE = path.join(STATE_DIR, 'widget-prefs.json');
 const TEAMS_FILE = path.join(STATE_DIR, 'teams.json');
 const TEAM_CONFIG_HOST = '127.0.0.1';
 const TEAM_CONFIG_PORT = 9876;
-const JOIN_FIELDS = ['dashboard_url', 'team_id', 'member_id', 'auth_token', 'team_name'];
+const JOIN_FIELDS = ['team_id', 'member_id', 'auth_token', 'team_name'];
+const DEFAULT_DASHBOARD_URL = 'https://andon-dashboard.vercel.app';
 const DASHBOARD_STATES = new Set(['green', 'yellow', 'red']);
 const DEFAULT_READY_SOUND = 'sound-1';
 const READY_SOUNDS = [
@@ -124,7 +125,18 @@ function resetAll() {
 }
 
 function emptyTeamsStore() {
-  return { active_team_id: null, teams: {} };
+  return { active_team_id: null, teams: {}, dashboard_url: DEFAULT_DASHBOARD_URL };
+}
+
+function ensureTeamsConfig() {
+  if (fs.existsSync(TEAMS_FILE)) return false;
+  saveTeamsStore(emptyTeamsStore());
+  return true;
+}
+
+function resolveDashboardUrl(team) {
+  const fromTeam = team && typeof team.dashboard_url === 'string' ? team.dashboard_url.trim() : '';
+  return (fromTeam || DEFAULT_DASHBOARD_URL).replace(/\/$/, '');
 }
 
 function loadTeamsStore() {
@@ -152,13 +164,14 @@ function loadTeamsStore() {
     activeId = Object.keys(teams)[0] || null;
   }
 
-  return { active_team_id: activeId, teams };
+  return { active_team_id: activeId, teams, dashboard_url: DEFAULT_DASHBOARD_URL };
 }
 
 function saveTeamsStore(store) {
   saveJson(TEAMS_FILE, {
     active_team_id: store.active_team_id,
     teams: store.teams,
+    dashboard_url: DEFAULT_DASHBOARD_URL,
   });
 }
 
@@ -176,6 +189,8 @@ function readJoinPayload(body) {
     if (typeof body[key] !== 'string' || !body[key].trim()) return null;
     result[key] = body[key].trim();
   }
+  const fromBody = typeof body.dashboard_url === 'string' ? body.dashboard_url.trim() : '';
+  result.dashboard_url = fromBody || DEFAULT_DASHBOARD_URL;
   return result;
 }
 
@@ -194,7 +209,7 @@ function copyJoinLink() {
   try {
     const team = getActiveTeam();
     if (!team) return;
-    const dashboardUrl = typeof team.dashboard_url === 'string' ? team.dashboard_url.replace(/\/$/, '') : '';
+    const dashboardUrl = resolveDashboardUrl(team);
     if (!dashboardUrl) return;
     const payload = {
       dashboard_url: dashboardUrl,
@@ -270,7 +285,7 @@ function notifyDashboard(state) {
       return;
     }
 
-    const dashboardUrl = typeof team.dashboard_url === 'string' ? team.dashboard_url.trim() : '';
+    const dashboardUrl = resolveDashboardUrl(team);
     const teamId = typeof team.team_id === 'string' ? team.team_id.trim() : '';
     const memberId = typeof team.member_id === 'string' ? team.member_id.trim() : '';
     const authToken = typeof team.auth_token === 'string' ? team.auth_token.trim() : '';
@@ -426,7 +441,10 @@ function buildTeamsSubmenu() {
   const store = loadTeamsStore();
   const teamIds = Object.keys(store.teams);
   if (teamIds.length === 0) {
-    return [{ label: 'No teams yet', enabled: false }];
+    return [
+      { label: 'Open dashboard', click: () => shell.openExternal(DEFAULT_DASHBOARD_URL) },
+      { label: 'No teams yet', enabled: false },
+    ];
   }
 
   return [
@@ -441,6 +459,7 @@ function buildTeamsSubmenu() {
       };
     }),
     { type: 'separator' },
+    { label: 'Open dashboard', click: () => shell.openExternal(DEFAULT_DASHBOARD_URL) },
     { label: 'Copy join link', click: copyJoinLink },
   ];
 }
@@ -582,6 +601,10 @@ function runSetup() {
 
   const bundledScript = fs.readFileSync(path.join(__dirname, 'update-status.js'), 'utf8');
   fs.writeFileSync(path.join(STATE_DIR, 'update-status.js'), bundledScript);
+  fs.copyFileSync(path.join(__dirname, 'merge-hooks.js'), path.join(STATE_DIR, 'merge-hooks.js'));
+
+  const firstLaunch = ensureTeamsConfig();
+  return { firstLaunch };
 }
 
 const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 4;
@@ -603,8 +626,14 @@ async function runUpdateCheck(silent) {
 }
 
 app.whenReady().then(() => {
-  runSetup();
+  const { firstLaunch } = runSetup();
   startTeamConfigServer();
+
+  if (firstLaunch) {
+    shell.openExternal(DEFAULT_DASHBOARD_URL).catch((err) => {
+      console.error('Andon: could not open dashboard', err && err.message ? err.message : err);
+    });
+  }
 
   tray = new Tray(stateImages.off);
   tray.setTitle('');

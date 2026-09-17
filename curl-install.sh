@@ -63,7 +63,29 @@ xattr -dr com.apple.quarantine "/Applications/Andon.app" 2>/dev/null || true
 
 rm -rf "$TMP_DIR"
 
-echo "Launching Andon (this runs first-time setup — hooks for Claude Code and Cursor)..."
+# Copy hook merger out of the app bundle and run it now so ~/.cursor/hooks.json
+# (beforeSubmitPrompt + stop) is ready before Andon even launches.
+if ! command -v node >/dev/null 2>&1; then
+  fail "Node.js is required for Cursor/Claude hooks. Install it from https://nodejs.org (or 'brew install node') and re-run this script."
+fi
+
+mkdir -p "$HOME/.andon"
+BUNDLED_HOOKS="/Applications/Andon.app/Contents/Resources/app/merge-hooks.js"
+if [ ! -f "$BUNDLED_HOOKS" ]; then
+  fail "Couldn't find merge-hooks.js inside Andon.app — the release zip looks incomplete."
+fi
+cp "$BUNDLED_HOOKS" "$HOME/.andon/merge-hooks.js"
+BUNDLED_STATUS="/Applications/Andon.app/Contents/Resources/app/update-status.js"
+if [ -f "$BUNDLED_STATUS" ]; then
+  cp "$BUNDLED_STATUS" "$HOME/.andon/update-status.js"
+fi
+
+echo "Setting up Cursor/Claude hooks..."
+if ! node "$HOME/.andon/merge-hooks.js"; then
+  fail "Hook installation failed — see the error above. Your existing ~/.cursor/hooks.json was not overwritten."
+fi
+
+echo "Launching Andon (first-time team config + dashboard)..."
 open "/Applications/Andon.app"
 
 echo ""
